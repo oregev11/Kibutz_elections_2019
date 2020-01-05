@@ -1,0 +1,833 @@
+
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-tables-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-gl-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/jquery-2.1.4.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/ui/1.10.4/jquery-ui.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.1.20/require.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js" type="text/javascript"></script>
+<script type="text/javascript">function HoloViewsWidget() {
+}
+
+HoloViewsWidget.prototype.init_slider = function(init_val){
+  if(this.load_json) {
+    this.from_json()
+  } else {
+    this.update_cache();
+  }
+}
+
+HoloViewsWidget.prototype.populate_cache = function(idx){
+  this.cache[idx].innerHTML = this.frames[idx];
+  if (this.embed) {
+    delete this.frames[idx];
+  }
+}
+
+HoloViewsWidget.prototype.process_error = function(msg){
+}
+
+HoloViewsWidget.prototype.from_json = function() {
+  var data_url = this.json_path + this.id + '.json';
+  $.getJSON(data_url, $.proxy(function(json_data) {
+    this.frames = json_data;
+    this.update_cache();
+    this.update(0);
+  }, this));
+}
+
+HoloViewsWidget.prototype.dynamic_update = function(current){
+  if (current === undefined) {
+    return
+  }
+  this.current = current;
+  if (this.comm) {
+    var msg = {comm_id: this.id+'_client', content: current}
+    this.comm.send(msg);
+  }
+}
+
+HoloViewsWidget.prototype.update_cache = function(force){
+  var frame_len = Object.keys(this.frames).length;
+  for (var i=0; i<frame_len; i++) {
+    if(!this.load_json || this.dynamic)  {
+      var frame = Object.keys(this.frames)[i];
+    } else {
+      var frame = i;
+    }
+    if(!(frame in this.cache) || force) {
+      if ((frame in this.cache) && force) { this.cache[frame].remove() }
+      var div = document.createElement("div");
+      var parent = document.getElementById("_anim_img"+this.id);
+      div.style.display = "none";
+      parent.appendChild(div)
+      this.cache[frame] = div;
+      var cache_id = "_anim_img"+this.id+"_"+frame;
+      this.populate_cache(frame);
+    }
+  }
+}
+
+HoloViewsWidget.prototype.update = function(current){
+  if(current in this.cache) {
+    for (var index in this.cache) {
+      this.cache[index].style.display = "none";
+    }
+    this.cache[current].style.display = "";
+    this.wait = false;
+  }
+}
+
+HoloViewsWidget.prototype.init_comms = function() {
+  var that = this
+  HoloViews.comm_manager.register_target(this.plot_id, this.id, function (msg) { that.msg_handler(msg) })
+  if (!this.cached || this.dynamic) {
+    function ack_callback(msg) {
+      var msg = msg.metadata;
+      var comm_id = msg.comm_id;
+      var comm_status = HoloViews.comm_status[comm_id];
+      if (that.queue.length > 0) {
+        that.time = Date.now();
+        that.dynamic_update(that.queue[that.queue.length-1]);
+        that.queue = [];
+      } else {
+        that.wait = false;
+      }
+      if ((msg.msg_type == "Ready") && msg.content) {
+        console.log("Python callback returned following output:", msg.content);
+      } else if (msg.msg_type == "Error") {
+        console.log("Python failed with the following traceback:", msg.traceback)
+      }
+    }
+    var comm = HoloViews.comm_manager.get_client_comm(this.plot_id, this.id+'_client', ack_callback);
+    return comm
+  }
+}
+
+HoloViewsWidget.prototype.msg_handler = function(msg) {
+  var metadata = msg.metadata;
+  if ((metadata.msg_type == "Ready")) {
+    if (metadata.content) {
+      console.log("Python callback returned following output:", metadata.content);
+    }
+	return;
+  } else if (metadata.msg_type == "Error") {
+    console.log("Python failed with the following traceback:", metadata.traceback)
+    return
+  }
+  this.process_msg(msg)
+}
+
+HoloViewsWidget.prototype.process_msg = function(msg) {
+}
+
+function SelectionWidget(frames, id, slider_ids, keyMap, dim_vals, notFound, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.frames = frames;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.slider_ids = slider_ids;
+  this.keyMap = keyMap
+  this.current_frame = 0;
+  this.current_vals = dim_vals;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.notFound = notFound;
+  this.cached = cached;
+  this.dynamic = dynamic;
+  this.cache = {};
+  this.json_path = json_path;
+  this.init_slider(this.current_vals[0]);
+  this.queue = [];
+  this.wait = false;
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms();
+  }
+}
+
+SelectionWidget.prototype = new HoloViewsWidget;
+
+
+SelectionWidget.prototype.get_key = function(current_vals) {
+  var key = "(";
+  for (var i=0; i<this.slider_ids.length; i++)
+  {
+    var val = this.current_vals[i];
+    if (!(typeof val === 'string')) {
+      if (val % 1 === 0) { val = val.toFixed(1); }
+      else { val = val.toFixed(10); val = val.slice(0, val.length-1);}
+    }
+    key += "'" + val + "'";
+    if(i != this.slider_ids.length-1) { key += ', ';}
+    else if(this.slider_ids.length == 1) { key += ',';}
+  }
+  key += ")";
+  return this.keyMap[key];
+}
+
+SelectionWidget.prototype.set_frame = function(dim_val, dim_idx){
+  this.current_vals[dim_idx] = dim_val;
+  var key = this.current_vals;
+  if (!this.dynamic) {
+    key = this.get_key(key)
+  }
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(key);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.current_frame = key;
+    this.wait = true;
+    this.dynamic_update(key)
+  } else if (key !== undefined) {
+    this.update(key)
+  }
+}
+
+
+/* Define the ScrubberWidget class */
+function ScrubberWidget(frames, num_frames, id, interval, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.slider_id = "_anim_slider" + id;
+  this.loop_select_id = "_anim_loop_select" + id;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.interval = interval;
+  this.current_frame = 0;
+  this.direction = 0;
+  this.dynamic = dynamic;
+  this.timer = null;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.cached = cached;
+  this.frames = frames;
+  this.cache = {};
+  this.length = num_frames;
+  this.json_path = json_path;
+  document.getElementById(this.slider_id).max = this.length - 1;
+  this.init_slider(0);
+  this.wait = false;
+  this.queue = [];
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms()
+  }
+}
+
+ScrubberWidget.prototype = new HoloViewsWidget;
+
+ScrubberWidget.prototype.set_frame = function(frame){
+  this.current_frame = frame;
+  var widget = document.getElementById(this.slider_id);
+  if (widget === null) {
+    this.pause_animation();
+    return
+  }
+  widget.value = this.current_frame;
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(frame);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.wait = true;
+    this.dynamic_update(frame)
+  } else {
+    this.update(frame)
+  }
+}
+
+ScrubberWidget.prototype.get_loop_state = function(){
+  var button_group = document[this.loop_select_id].state;
+  for (var i = 0; i < button_group.length; i++) {
+    var button = button_group[i];
+    if (button.checked) {
+      return button.value;
+    }
+  }
+  return undefined;
+}
+
+
+ScrubberWidget.prototype.next_frame = function() {
+  this.set_frame(Math.min(this.length - 1, this.current_frame + 1));
+}
+
+ScrubberWidget.prototype.previous_frame = function() {
+  this.set_frame(Math.max(0, this.current_frame - 1));
+}
+
+ScrubberWidget.prototype.first_frame = function() {
+  this.set_frame(0);
+}
+
+ScrubberWidget.prototype.last_frame = function() {
+  this.set_frame(this.length - 1);
+}
+
+ScrubberWidget.prototype.slower = function() {
+  this.interval /= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.faster = function() {
+  this.interval *= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.anim_step_forward = function() {
+  if(this.current_frame < this.length - 1){
+    this.next_frame();
+  }else{
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.first_frame();
+    }else if(loop_state == "reflect"){
+      this.last_frame();
+      this.reverse_animation();
+    }else{
+      this.pause_animation();
+      this.last_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.anim_step_reverse = function() {
+  if(this.current_frame > 0){
+    this.previous_frame();
+  } else {
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.last_frame();
+    }else if(loop_state == "reflect"){
+      this.first_frame();
+      this.play_animation();
+    }else{
+      this.pause_animation();
+      this.first_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.pause_animation = function() {
+  this.direction = 0;
+  if (this.timer){
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+}
+
+ScrubberWidget.prototype.play_animation = function() {
+  this.pause_animation();
+  this.direction = 1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_forward();}, this.interval);
+}
+
+ScrubberWidget.prototype.reverse_animation = function() {
+  this.pause_animation();
+  this.direction = -1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_reverse();}, this.interval);
+}
+
+function extend(destination, source) {
+  for (var k in source) {
+    if (source.hasOwnProperty(k)) {
+      destination[k] = source[k];
+    }
+  }
+  return destination;
+}
+
+function update_widget(widget, values) {
+  if (widget.hasClass("ui-slider")) {
+    widget.slider('option', {
+      min: 0,
+      max: values.length-1,
+      dim_vals: values,
+      value: 0,
+      dim_labels: values
+    })
+    widget.slider('option', 'slide').call(widget, event, {value: 0})
+  } else {
+    widget.empty();
+    for (var i=0; i<values.length; i++){
+      widget.append($("<option>", {
+        value: i,
+        text: values[i]
+      }))
+    };
+    widget.data('values', values);
+    widget.data('value', 0);
+    widget.trigger("change");
+  };
+}
+
+function init_slider(id, plot_id, dim, values, next_vals, labels, dynamic, step, value, next_dim,
+                     dim_idx, delay, jQueryUI_CDN, UNDERSCORE_CDN) {
+  // Slider JS Block START
+  function loadcssfile(filename){
+    var fileref=document.createElement("link")
+    fileref.setAttribute("rel", "stylesheet")
+    fileref.setAttribute("type", "text/css")
+    fileref.setAttribute("href", filename)
+    document.getElementsByTagName("head")[0].appendChild(fileref)
+  }
+  loadcssfile("https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css");
+  /* Check if jQuery and jQueryUI have been loaded
+     otherwise load with require.js */
+  var jQuery = window.jQuery,
+    // check for old versions of jQuery
+    oldjQuery = jQuery && !!jQuery.fn.jquery.match(/^1\.[0-4](\.|$)/),
+    jquery_path = '',
+    paths = {},
+    noConflict;
+  var jQueryUI = jQuery.ui;
+  // check for jQuery
+  if (!jQuery || oldjQuery) {
+    // load if it's not available or doesn't meet min standards
+    paths.jQuery = jQuery;
+    noConflict = !!oldjQuery;
+  } else {
+    // register the current jQuery
+    define('jquery', [], function() { return jQuery; });
+  }
+  if (!jQueryUI) {
+    paths.jQueryUI = jQueryUI_CDN.slice(null, -3);
+  } else {
+    define('jQueryUI', [], function() { return jQuery.ui; });
+  }
+  paths.underscore = UNDERSCORE_CDN.slice(null, -3);
+  var jquery_require = {
+    paths: paths,
+    shim: {
+      "jQueryUI": {
+        exports:"$",
+        deps: ['jquery']
+      },
+      "underscore": {
+        exports: '_'
+      }
+    }
+  }
+  require.config(jquery_require);
+  require(["jQueryUI", "underscore"], function(jUI, _){
+    if (noConflict) $.noConflict(true);
+    var vals = values;
+    if (dynamic && vals.constructor === Array) {
+      var default_value = parseFloat(value);
+      var min = parseFloat(vals[0]);
+      var max = parseFloat(vals[vals.length-1]);
+      var wstep = step;
+      var wlabels = [default_value];
+      var init_label = default_value;
+    } else {
+      var min = 0;
+      if (dynamic) {
+        var max = Object.keys(vals).length - 1;
+        var init_label = labels[value];
+        var default_value = values[value];
+      } else {
+        var max = vals.length - 1;
+        var init_label = labels[value];
+        var default_value = value;
+      }
+      var wstep = 1;
+      var wlabels = labels;
+    }
+    function adjustFontSize(text) {
+      var width_ratio = (text.parent().width()/8)/text.val().length;
+      var size = Math.min(0.9, Math.max(0.6, width_ratio))+'em';
+      text.css('font-size', size);
+    }
+    var slider = $('#_anim_widget'+id+'_'+dim);
+    slider.slider({
+      animate: "fast",
+      min: min,
+      max: max,
+      step: wstep,
+      value: default_value,
+      dim_vals: vals,
+      dim_labels: wlabels,
+      next_vals: next_vals,
+      slide: function(event, ui) {
+        var vals = slider.slider("option", "dim_vals");
+        var next_vals = slider.slider("option", "next_vals");
+        var dlabels = slider.slider("option", "dim_labels");
+        if (dynamic) {
+          var dim_val = ui.value;
+          if (vals.constructor === Array) {
+            var label = ui.value;
+          } else {
+            var label = dlabels[ui.value];
+          }
+        } else {
+          var dim_val = vals[ui.value];
+          var label = dlabels[ui.value];
+        }
+        var text = $('#textInput'+id+'_'+dim);
+        text.val(label);
+        adjustFontSize(text);
+        HoloViews.index[plot_id].set_frame(dim_val, dim_idx);
+        if (Object.keys(next_vals).length > 0) {
+          var new_vals = next_vals[dim_val];
+          var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+          update_widget(next_widget, new_vals);
+        }
+      }
+    });
+    slider.keypress(function(event) {
+      if (event.which == 80 || event.which == 112) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "max");
+        for (var i=start; i<=stop; i++) {
+          var delay = i*delay;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+      if (event.which == 82 || event.which == 114) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "min");
+        var count = 0;
+        for (var i=start; i>=stop; i--) {
+          var delay = count*delay;
+          count = count + 1;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+    });
+    var textInput = $('#textInput'+id+'_'+dim)
+    textInput.val(init_label);
+    adjustFontSize(textInput);
+  });
+}
+
+function init_dropdown(id, plot_id, dim, vals, value, next_vals, labels, next_dim, dim_idx, dynamic) {
+  var widget = $("#_anim_widget"+id+'_'+dim);
+  widget.data('values', vals)
+  for (var i=0; i<vals.length; i++){
+    if (dynamic) {
+      var val = vals[i];
+    } else {
+      var val = i;
+    }
+    widget.append($("<option>", {
+      value: val,
+      text: labels[i]
+    }));
+  };
+  widget.data("next_vals", next_vals);
+  widget.val(value);
+  widget.on('change', function(event, ui) {
+    if (dynamic) {
+      var dim_val = parseInt(this.value);
+    } else {
+      var dim_val = $.data(this, 'values')[this.value];
+    }
+    var next_vals = $.data(this, "next_vals");
+    if (Object.keys(next_vals).length > 0) {
+      var new_vals = next_vals[dim_val];
+      var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+      update_widget(next_widget, new_vals);
+    }
+    var widgets = HoloViews.index[plot_id]
+    if (widgets) {
+      widgets.set_frame(dim_val, dim_idx);
+    }
+  });
+}
+
+
+if (window.HoloViews === undefined) {
+  window.HoloViews = {}
+  window.PyViz = window.HoloViews
+} else if (window.PyViz === undefined) {
+  window.PyViz = window.HoloViews
+}
+
+
+var _namespace = {
+  init_slider: init_slider,
+  init_dropdown: init_dropdown,
+  comms: {},
+  comm_status: {},
+  index: {},
+  plot_index: {},
+  kernels: {},
+  receivers: {}
+}
+
+for (var k in _namespace) {
+  if (!(k in window.HoloViews)) {
+    window.HoloViews[k] = _namespace[k];
+  }
+}
+
+// Define Bokeh specific subclasses
+function BokehSelectionWidget() {
+  SelectionWidget.apply(this, arguments);
+}
+
+function BokehScrubberWidget() {
+  ScrubberWidget.apply(this, arguments);
+}
+
+// Let them inherit from the baseclasses
+BokehSelectionWidget.prototype = Object.create(SelectionWidget.prototype);
+BokehScrubberWidget.prototype = Object.create(ScrubberWidget.prototype);
+
+// Define methods to override on widgets
+var BokehMethods = {
+  update_cache : function(){
+    for (var index in this.frames) {
+      this.frames[index] = JSON.parse(this.frames[index]);
+    }
+  },
+  update : function(current){
+    if (current === undefined) {
+      return;
+    }
+    var data = this.frames[current];
+    if (data !== undefined) {
+      if (data.root in HoloViews.plot_index) {
+        var doc = HoloViews.plot_index[data.root].model.document;
+      } else {
+        var doc = Bokeh.index[data.root].model.document;
+      }
+      doc.apply_json_patch(data.content);
+    }
+  },
+  init_comms: function() {
+    if (Bokeh.protocol !== undefined) {
+      this.receiver = new Bokeh.protocol.Receiver()
+    } else {
+      this.receiver = null;
+    }
+    return HoloViewsWidget.prototype.init_comms.call(this);
+  },
+  process_msg : function(msg) {
+    if (this.plot_id in HoloViews.plot_index) {
+      var doc = HoloViews.plot_index[this.plot_id].model.document;
+    } else {
+      var doc = Bokeh.index[this.plot_id].model.document;
+    }
+    if (this.receiver === null) { return }
+    var receiver = this.receiver;
+    if (msg.buffers.length > 0) {
+      receiver.consume(msg.buffers[0].buffer)
+    } else {
+      receiver.consume(msg.content.data)
+    }
+    const comm_msg = receiver.message;
+    if ((comm_msg != null) && (doc != null)) {
+      doc.apply_json_patch(comm_msg.content, comm_msg.buffers)
+    }
+  }
+}
+
+// Extend Bokeh widgets with backend specific methods
+extend(BokehSelectionWidget.prototype, BokehMethods);
+extend(BokehScrubberWidget.prototype, BokehMethods);
+
+window.HoloViews.BokehSelectionWidget = BokehSelectionWidget
+window.HoloViews.BokehScrubberWidget = BokehScrubberWidget
+</script>
+<script type="text/javascript">
+    function JupyterCommManager() {
+    }
+
+    JupyterCommManager.prototype.register_target = function(plot_id, comm_id, msg_handler) {
+      if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        comm_manager.register_target(comm_id, function(comm) {
+          comm.on_msg(msg_handler);
+        });
+      } else if ((plot_id in window.PyViz.kernels) && (window.PyViz.kernels[plot_id])) {
+        window.PyViz.kernels[plot_id].registerCommTarget(comm_id, function(comm) {
+          comm.onMsg = msg_handler;
+        });
+      }
+    }
+
+    JupyterCommManager.prototype.get_client_comm = function(plot_id, comm_id, msg_handler) {
+      if (comm_id in window.PyViz.comms) {
+        return window.PyViz.comms[comm_id];
+      } else if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        var comm = comm_manager.new_comm(comm_id, {}, {}, {}, comm_id);
+        if (msg_handler) {
+          comm.on_msg(msg_handler);
+        }
+      } else if ((plot_id in window.PyViz.kernels) && (window.PyViz.kernels[plot_id])) {
+        var comm = window.PyViz.kernels[plot_id].connectToComm(comm_id);
+        comm.open();
+        if (msg_handler) {
+          comm.onMsg = msg_handler;
+        }
+      }
+
+      window.PyViz.comms[comm_id] = comm;
+      return comm;
+    }
+
+    window.PyViz.comm_manager = new JupyterCommManager();
+    </script>
+
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css">
+<style>div.bk-hbox {
+    display: flex;
+    justify-content: center;
+}
+
+div.bk-hbox div.bk-plot {
+    padding: 8px;
+}
+
+div.bk-hbox div.bk-data-table {
+    padding: 20px;
+}
+
+div.hololayout {
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+
+div.holoframe {
+  width: 75%;
+}
+
+div.holowell {
+  display: flex;
+  align-items: center;
+}
+
+form.holoform {
+  background-color: #fafafa;
+  border-radius: 5px;
+  overflow: hidden;
+  padding-left: 0.8em;
+  padding-right: 0.8em;
+  padding-top: 0.4em;
+  padding-bottom: 0.4em;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.05);
+  margin-bottom: 20px;
+  border: 1px solid #e3e3e3;
+}
+
+div.holowidgets {
+  padding-right: 0;
+  width: 25%;
+}
+
+div.holoslider {
+  min-height: 0 !important;
+  height: 0.8em;
+  width: 100%;
+}
+
+div.holoformgroup {
+  padding-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+div.hologroup {
+  padding-left: 0;
+  padding-right: 0.8em;
+  width: 100%;
+}
+
+.holoselect {
+  width: 92%;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.holotext {
+  padding-left:  0.5em;
+  padding-right: 0;
+  width: 100%;
+}
+
+.holowidgets .ui-resizable-se {
+  visibility: hidden
+}
+
+.holoframe > .ui-resizable-se {
+  visibility: hidden
+}
+
+.holowidgets .ui-resizable-s {
+  visibility: hidden
+}
+
+
+/* CSS rules for noUISlider based slider used by JupyterLab extension  */
+
+.noUi-handle {
+  width: 20px !important;
+  height: 20px !important;
+  left: -5px !important;
+  top: -5px !important;
+}
+
+.noUi-handle:before, .noUi-handle:after {
+  visibility: hidden;
+  height: 0px;
+}
+
+.noUi-target {
+  margin-left: 0.5em;
+  margin-right: 0.5em;
+}
+</style><div style='display: table; margin: 0 auto;'>
+
+
+
+
+
+
+  <div class="bk-root" id="ddb52ece-adbb-4bde-bc02-2f1911827a47" data-root-id="3289"></div>
+
+<script type="text/javascript">
+  (function(root) {
+  function embed_document(root) {
+    
+  var docs_json = {"025970b8-6054-431d-9375-9a51821c8b3f":{"roots":{"references":[{"attributes":{"align":null,"below":[{"id":"3298","type":"LinearAxis"}],"center":[{"id":"3302","type":"Grid"},{"id":"3307","type":"Grid"}],"left":[{"id":"3303","type":"LinearAxis"}],"margin":null,"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_height":900,"plot_width":900,"renderers":[{"id":"3339","type":"TileRenderer"},{"id":"3351","type":"GlyphRenderer"}],"sizing_mode":"fixed","title":{"id":"3290","type":"Title"},"toolbar":{"id":"3311","type":"Toolbar"},"x_range":{"id":"3280","type":"Range1d"},"x_scale":{"id":"3294","type":"LinearScale"},"y_range":{"id":"3281","type":"Range1d"},"y_scale":{"id":"3296","type":"LinearScale"}},"id":"3289","subtype":"Figure","type":"Plot"},{"attributes":{"callback":null,"renderers":[{"id":"3351","type":"GlyphRenderer"}],"tooltips":[["name","@kibutzName"],["Valid Votes","@validVotes"],["Invalid Votes","@invalidVotes"],["Nir Meir %","@NM_PercentStr"],["Lior Simcha %","@LS_PercentStr"],["winner","@winner"]]},"id":"3286","type":"HoverTool"},{"attributes":{"fill_alpha":{"field":"alpha"},"fill_color":{"field":"color"},"line_alpha":{"field":"alpha"},"line_color":{"value":"grey"},"size":{"field":"size","units":"screen"},"x":{"field":"long"},"y":{"field":"lat"}},"id":"3346","type":"Scatter"},{"attributes":{"zoom_on_axis":false},"id":"3282","type":"WheelZoomTool"},{"attributes":{"fill_alpha":{"field":"alpha"},"fill_color":{"field":"color"},"line_alpha":{"field":"alpha"},"line_color":{"value":"grey"},"size":{"field":"size","units":"screen"},"x":{"field":"long"},"y":{"field":"lat"}},"id":"3347","type":"Scatter"},{"attributes":{},"id":"3356","type":"UnionRenderers"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"3358","type":"BoxAnnotation"},{"attributes":{"fill_alpha":{"field":"alpha"},"fill_color":{"field":"color"},"line_alpha":{"field":"alpha"},"line_color":{"value":"grey"},"size":{"field":"size","units":"screen"},"x":{"field":"long"},"y":{"field":"lat"}},"id":"3348","type":"Scatter"},{"attributes":{"callback":null,"data":{"LS_Percent":{"__ndarray__":"FwAAABIAAAAuAAAARAAAAC0AAAALAAAAKQAAAFoAAABPAAAAEwAAABYAAAARAAAAHwAAADwAAAAbAAAAPgAAADgAAAAZAAAAFgAAAA4AAABkAAAALgAAAAIAAAA4AAAAEAAAADIAAAAAAAAAEQAAACUAAAAbAAAAVwAAABAAAAA0AAAATAAAABwAAABAAAAALgAAADoAAAARAAAARwAAAC4AAAApAAAAMwAAABUAAABOAAAANQAAAAYAAAAbAAAAOgAAAAAAAABRAAAAPgAAAEQAAABCAAAAOQAAABMAAAAUAAAAMAAAAEYAAAArAAAAGgAAAEgAAABJAAAASgAAAB0AAAAqAAAANgAAAEMAAAA5AAAAQAAAACEAAAAoAAAAFAAAAA4AAABGAAAAGgAAACUAAAAcAAAAGAAAABYAAAARAAAALgAAACMAAAAOAAAARgAAAA8AAAAQAAAAJQAAAD8AAAACAAAAAAAAAEsAAAAoAAAAPQAAAAoAAAAwAAAAKQAAAAAAAABZAAAAJQAAABcAAABTAAAAAgAAADAAAAAuAAAALwAAACwAAAAwAAAATAAAABkAAAAAAAAAKgAAABIAAAAAAAAADgAAAFIAAAAJAAAALAAAAAkAAAAQAAAAGgAAABsAAAAHAAAADwAAACYAAAAJAAAAPQAAAAoAAAAaAAAAPAAAADIAAAAUAAAAHgAAAFEAAAAxAAAASAAAAEYAAAANAAAAJAAAAAUAAABEAAAADQAAACoAAAALAAAAJgAAAEgAAAAxAAAAJgAAADYAAAAtAAAAFAAAADIAAAAcAAAAUwAAAA0AAAA1AAAACgAAAD8AAAAZAAAAPQAAADwAAAAbAAAAFgAAADYAAAAZAAAAEQAAADMAAAANAAAAKQAAAC8AAABOAAAACQAAACMAAAAAAAAAJgAAABkAAABIAAAAQgAAACgAAAANAAAARQAAAAoAAAAcAAAAUwAAABIAAAAdAAAAEwAAAGQAAABUAAAAGwAAAB0AAAAFAAAAVwAAAAsAAAARAAAAVgAAAEIAAABQAAAAKAAAADYAAAAuAAAAFQAAAEwAAABEAAAANQAAAEEAAABVAAAANAAAACAAAAA6AAAADwAAACQAAAA3AAAAGQAAACwAAAAoAAAANQAAAAwAAAAcAAAAUQAAAAEAAAAyAAAAOgAAADAAAAAuAAAAZAAAACQAAAAJAAAAQAAAAC4AAAA6AAAARQAAADkAAAAoAAAAUwAAADMAAAAWAAAANwAAACkAAAAvAAAAEAAAACkAAAAqAAAALAAAABwAAABQAAAALQAAACUAAABNAAAALgAAAFIAAAAkAAAANQAAAB4AAAAoAAAAAAAAAAAAAAAAAAAA","dtype":"int32","shape":[258]},"LS_PercentStr":["23.52%","18.60%","46.15%","68.25%","45.0%","11.42%","41.26%","90.90%","79.01%","19.04%","22.03%","17.85%","31.81%","60.0%","27.27%","62.0%","56.66%","25.71%","22.05%","14.86%","100%","46.92%","2.5%","56.09%","16.0%","50.0%","0%","17.78%","37.5%","27.77%","87.09%","16.66%","52.63%","76.92%","28.12%","64.0%","46.57%","58.16%","17.78%","71.42%","46.77%","41.88%","51.85%","21.66%","78.64%","53.48%","6.666%","27.35%","58.62%","0%","81.41%","62.26%","68.62%","66.23%","57.62%","19.40%","20.0%","48.14%","70.45%","43.75%","26.31%","72.16%","73.21%","74.41%","29.16%","42.52%","54.28%","67.77%","57.97%","64.61%","33.33%","40.0%","20.0%","14.67%","70.0%","26.19%","37.33%","28.12%","24.46%","22.22%","17.39%","46.66%","35.84%","14.81%","70.17%","15.0%","16.07%","37.25%","63.07%","2.631%","0%","75.40%","40.40%","61.60%","10.25%","48.51%","41.52%","0%","89.38%","37.5%","23.52%","83.68%","2.439%","48.64%","46.23%","47.05%","44.0%","48.48%","76.92%","25.58%","0%","42.98%","18.42%","0%","14.28%","82.60%","9.756%","44.73%","9.183%","16.66%","26.19%","27.69%","7.575%","15.44%","38.63%","9.230%","61.53%","10.0%","26.08%","60.71%","50.70%","20.0%","30.76%","81.25%","49.01%","72.72%","70.96%","13.20%","36.89%","5.660%","68.0%","13.63%","42.85%","11.36%","38.46%","72.0%","49.05%","38.70%","54.26%","45.90%","20.75%","50.0%","28.35%","83.65%","13.46%","53.48%","10.71%","63.88%","25.0%","61.29%","60.37%","27.77%","22.72%","54.83%","25.0%","17.90%","51.06%","13.13%","41.17%","47.54%","78.33%","9.333%","35.41%","0%","38.63%","25.60%","72.72%","66.21%","40.0%","13.84%","69.14%","10.97%","28.57%","83.33%","18.64%","29.48%","19.77%","100%","84.73%","27.77%","29.21%","5.714%","87.27%","11.11%","17.70%","86.91%","66.23%","80.76%","40.0%","54.71%","46.42%","21.87%","76.98%","68.55%","53.94%","65.62%","85.36%","52.38%","32.78%","58.69%","15.78%","36.58%","55.76%","25.0%","44.82%","40.09%","53.84%","12.98%","28.57%","81.70%","1.754%","50.0%","58.33%","48.78%","46.06%","100%","36.0%","9.859%","64.13%","46.42%","58.46%","69.49%","57.69%","40.60%","83.19%","51.66%","22.97%","55.88%","41.17%","47.36%","16.66%","41.17%","42.10%","44.44%","28.84%","80.19%","45.0%","37.83%","77.96%","46.47%","82.66%","36.84%","53.52%","30.0%","40.29%","0%","0","0"],"NM_Percent":{"__ndarray__":"TAAAAFEAAAA1AAAAHwAAADcAAABYAAAAOgAAAAkAAAAUAAAAUAAAAE0AAABSAAAARAAAACgAAABIAAAAJgAAACsAAABKAAAATQAAAFUAAAAAAAAANQAAAGEAAAArAAAAVAAAADIAAABkAAAAUgAAAD4AAABIAAAADAAAAFMAAAAvAAAAFwAAAEcAAAAkAAAANQAAACkAAABSAAAAHAAAADUAAAA6AAAAMAAAAE4AAAAVAAAALgAAAF0AAABIAAAAKQAAAGQAAAASAAAAJQAAAB8AAAAhAAAAKgAAAFAAAABQAAAAMwAAAB0AAAA4AAAASQAAABsAAAAaAAAAGQAAAEYAAAA5AAAALQAAACAAAAAqAAAAIwAAAEIAAAA8AAAAUAAAAFUAAAAeAAAASQAAAD4AAABHAAAASwAAAE0AAABSAAAANQAAAEAAAABVAAAAHQAAAFUAAABTAAAAPgAAACQAAABhAAAAZAAAABgAAAA7AAAAJgAAAFkAAAAzAAAAOgAAAGQAAAAKAAAAPgAAAEwAAAAQAAAAYQAAADMAAAA1AAAANAAAADsAAAAzAAAAFwAAAEoAAABkAAAAOQAAAFEAAABkAAAAVQAAABEAAABaAAAANwAAAFoAAABTAAAASQAAAEgAAABcAAAAVAAAAD0AAABaAAAAJgAAAFoAAABJAAAAJwAAADEAAABQAAAARQAAABIAAAAyAAAAGwAAAB0AAABWAAAAPwAAAF4AAAAgAAAAVgAAADkAAABYAAAAPQAAABwAAAAyAAAAPQAAAC0AAAA2AAAATwAAADIAAABHAAAADwAAAFYAAAAuAAAAWQAAACQAAABLAAAAJgAAACcAAABIAAAATQAAAC0AAABLAAAAUgAAADAAAABUAAAAOgAAADQAAAAVAAAAWgAAAEAAAABkAAAAPQAAAEoAAAAbAAAAIQAAADwAAABWAAAAHgAAAFkAAABHAAAAEAAAAFEAAABGAAAAUAAAAAAAAAAPAAAASAAAAEYAAABeAAAADAAAAFgAAABSAAAADQAAACEAAAATAAAAPAAAAC0AAAA1AAAATgAAABUAAAAfAAAALgAAACIAAAAOAAAALwAAAEMAAAAnAAAAVAAAAD8AAAAsAAAASwAAADcAAAA7AAAALgAAAFcAAABHAAAAEgAAAGIAAAAyAAAAKQAAADIAAAA1AAAAAAAAAEAAAABaAAAAIwAAADUAAAApAAAAHgAAACoAAAA7AAAAEAAAADAAAABNAAAALAAAADoAAAA0AAAAUwAAADoAAAA5AAAANwAAAEcAAAATAAAANwAAAD4AAAAWAAAANQAAABEAAAA/AAAALgAAAEYAAAA7AAAAZAAAAAAAAAAAAAAA","dtype":"int32","shape":[258]},"NM_PercentStr":["76.47%","81.39%","53.84%","31.74%","55.00%","88.57%","58.73%","9.090%","20.98%","80.95%","77.96%","82.14%","68.18%","40.0%","72.72%","38.0%","43.33%","74.28%","77.94%","85.13%","0%","53.07%","97.5%","43.90%","84.0%","50.0%","100%","82.21%","62.5%","72.22%","12.90%","83.33%","47.36%","23.07%","71.87%","36.0%","53.42%","41.83%","82.21%","28.57%","53.22%","58.11%","48.14%","78.33%","21.35%","46.51%","93.33%","72.64%","41.37%","100%","18.58%","37.73%","31.37%","33.76%","42.37%","80.59%","80.0%","51.85%","29.54%","56.25%","73.68%","27.83%","26.78%","25.58%","70.83%","57.47%","45.71%","32.22%","42.02%","35.38%","66.66%","60.0%","80.0%","85.32%","30.0%","73.80%","62.66%","71.87%","75.53%","77.77%","82.60%","53.33%","64.15%","85.18%","29.82%","85.0%","83.92%","62.74%","36.92%","97.36%","100%","24.59%","59.59%","38.39%","89.74%","51.48%","58.47%","100%","10.61%","62.5%","76.47%","16.31%","97.56%","51.35%","53.76%","52.94%","59.72%","51.51%","23.07%","74.41%","100%","57.01%","81.57%","100%","85.71%","17.39%","90.24%","55.26%","90.81%","83.33%","73.80%","72.30%","92.42%","84.55%","61.36%","90.76%","38.46%","90.0%","73.91%","39.28%","49.29%","80.0%","69.23%","18.75%","50.98%","27.27%","29.03%","86.79%","63.10%","94.33%","32.0%","86.36%","57.14%","88.63%","61.53%","28.00%","50.94%","61.29%","45.73%","54.09%","79.24%","50.0%","71.64%","15.38%","86.53%","46.51%","89.28%","36.11%","75.0%","38.70%","39.62%","72.22%","77.27%","45.16%","75.0%","82.09%","48.93%","84.84%","58.82%","52.45%","21.66%","90.66%","64.58%","100%","61.36%","74.39%","27.27%","33.78%","60.0%","86.15%","30.85%","89.02%","71.42%","16.66%","81.35%","70.51%","80.22%","0%","15.26%","72.22%","70.78%","94.28%","12.72%","88.88%","82.29%","13.08%","33.76%","19.23%","60.0%","45.28%","53.57%","78.12%","21.42%","31.44%","46.05%","34.37%","14.63%","47.61%","67.21%","39.13%","84.21%","63.41%","44.23%","75.0%","55.17%","59.90%","46.15%","87.01%","71.42%","18.29%","98.24%","50.0%","41.66%","50.0%","53.93%","0%","64.0%","90.14%","35.86%","53.57%","41.53%","30.50%","42.30%","59.39%","16.80%","48.33%","77.02%","44.11%","58.82%","52.63%","83.33%","58.82%","57.89%","55.55%","71.15%","19.80%","55.00%","62.16%","22.03%","53.52%","17.33%","63.15%","46.47%","70.0%","59.70%","100%","0","0"],"alpha":{"__ndarray__":"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","dtype":"float64","shape":[258]},"color":["orange","orange","orange","blue","orange","orange","orange","blue","blue","orange","orange","orange","orange","blue","orange","blue","blue","orange","orange","orange","blue","orange","orange","blue","orange","blue","orange","orange","orange","orange","blue","orange","blue","blue","orange","blue","orange","blue","orange","blue","orange","orange","blue","orange","blue","blue","orange","orange","blue","orange","blue","blue","blue","blue","blue","orange","orange","orange","blue","orange","orange","blue","blue","blue","orange","orange","blue","blue","blue","blue","orange","orange","orange","orange","blue","orange","orange","orange","orange","orange","orange","orange","orange","orange","blue","orange","orange","orange","blue","orange","orange","blue","orange","blue","orange","orange","orange","orange","blue","orange","orange","blue","orange","orange","orange","orange","orange","orange","blue","orange","orange","orange","orange","orange","orange","blue","orange","orange","orange","orange","orange","orange","orange","orange","orange","orange","blue","orange","orange","blue","blue","orange","orange","blue","orange","blue","blue","orange","orange","orange","blue","orange","orange","orange","orange","blue","orange","orange","blue","orange","orange","blue","orange","blue","orange","blue","orange","blue","orange","blue","blue","orange","orange","blue","orange","orange","blue","orange","orange","orange","blue","orange","orange","orange","orange","orange","blue","blue","orange","orange","blue","orange","orange","blue","orange","orange","orange","blue","blue","orange","orange","orange","blue","orange","orange","blue","blue","blue","orange","blue","orange","orange","blue","blue","blue","blue","blue","blue","orange","blue","orange","orange","blue","orange","orange","orange","blue","orange","orange","blue","orange","blue","blue","orange","orange","blue","orange","orange","blue","orange","blue","blue","blue","orange","blue","blue","orange","blue","orange","orange","orange","orange","orange","orange","orange","blue","orange","orange","blue","orange","blue","orange","blue","orange","orange","orange","white","white"],"herdScale":{"__ndarray__":"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","dtype":"float64","shape":[258]},"invalidVotes":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPA/AAAAAAAAAAAAAAAAAADwPwAAAAAAAPA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwPwAAAAAAAAAAAAAAAAAAAEAAAAAAAADwPwAAAAAAAAAAAAAAAAAA8D8AAAAAAAAAAAAAAAAAAAAAAAAAAAAA8D8AAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwPwAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8D8AAAAAAAAIQAAAAAAAAABAAAAAAAAA8D8AAAAAAADwPwAAAAAAAAAAAAAAAAAAAAAAAAAAAADwPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwPwAAAAAAAPA/AAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwPwAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8D8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8D8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAA8D8AAAAAAADwPwAAAAAAAAAAAAAAAAAAAAAAAAAAAADwPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8D8AAAAAAAAAAAAAAAAAAAAAAAAAAAAA8D8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAPA/AAAAAAAA8D8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPA/AAAAAAAA8D8AAAAAAAAAAAAAAAAAAPA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAPA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAPA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8D8AAAAAAADwPwAAAAAAAAAAAAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8D8AAAAAAAAIQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwPwAAAAAAAAhAAAAAAAAAAAAAAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8D8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAA8D8AAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPA/AAAAAAAA8D8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABhAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPA/AAAAAAAA8D8AAAAAAAAAQAAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAPA/AAAAAAAA8D8AAAAAAADwPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIQAAAAAAAAPA/AAAAAAAA8D8AAAAAAAAAAAAAAAAAAAAAAAAAAAAA8D8AAAAAAAAAAAAAAAAAAAhAAAAAAAAAAAAAAAAAAADwPwAAAAAAAPA/AAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","dtype":"float64","shape":[258]},"kibutzName":["\u05d0\u05d3\u05de\u05d9\u05ea","\u05d0\u05d5\u05e8 \u05d4\u05e0\u05e8","\u05d0\u05d5\u05e8\u05d8\u05dc","\u05d0\u05d5\u05e8\u05d9\u05dd","\u05d0\u05d5\u05e9\u05d4","\u05d0\u05d9\u05d9\u05dc","\u05d0\u05d9\u05dc\u05d5\u05df","\u05d0\u05d9\u05dc\u05d5\u05ea","\u05d0\u05d9\u05dc\u05ea \u05d4\u05e9\u05d7\u05e8","\u05d0\u05dc\u05d5\u05de\u05d5\u05ea","\u05d0\u05dc\u05d5\u05e0\u05d9\u05dd","\u05d0\u05dc\u05d9\u05e4\u05d6","\u05d0\u05dc\u05de\u05d5\u05d2","\u05d0\u05dc\u05e8\u05d5\u05dd","\u05d0\u05e4\u05d9\u05e7","\u05d0\u05e4\u05d9\u05e7\u05d9\u05dd","\u05d0\u05e4\u05e7","\u05d0\u05e8\u05d6","\u05d0\u05e9\u05d3\u05d5\u05ea \u05d9\u05e2\u05e7\u05d1 \u05d0\u05d9\u05d7\u05d5\u05d3","\u05d0\u05e9\u05d3\u05d5\u05ea \u05d9\u05e2\u05e7\u05d1 \u05de\u05d0\u05d5\u05d7\u05d3","\u05d0\u05e9\u05d1\u05dc","\u05d1\u05d0\u05e8\u05d9","\u05d1\u05d7\u05df","\u05d1\u05d9\u05ea \u05d0\u05d5\u05e8\u05df","\u05d1\u05d9\u05ea \u05d0\u05dc\u05e4\u05d0","\u05d1\u05d9\u05ea \u05d2\u05d5\u05d1\u05e8\u05d9\u05df","\u05d1\u05d9\u05ea \u05d4\u05e2\u05e8\u05d1\u05d4","\u05d1\u05d9\u05ea \u05d4\u05e9\u05d9\u05d8\u05d4","\u05d1\u05d9\u05ea \u05d6\u05e8\u05e2","\u05d1\u05d9\u05ea \u05e0\u05d9\u05e8","\u05d1\u05d9\u05ea \u05e7\u05de\u05d4","\u05d1\u05d9\u05ea \u05e7\u05e9\u05ea","\u05d1\u05e8\u05d5\u05e8 \u05d7\u05d9\u05dc","\u05d1\u05e8\u05e2\u05dd","\u05d1\u05e8\u05e7\u05d0\u05d9","\u05d2\u05d1\u05d5\u05dc\u05d5\u05ea","\u05d2\u05d1\u05d9\u05dd","\u05d2\u05d1\u05e2","\u05d2\u05d1\u05e2\u05ea \u05d1\u05e8\u05e0\u05e8","\u05d2\u05d1\u05e2\u05ea \u05d4\u05e9\u05dc\u05d5\u05e9\u05d4","\u05d2\u05d1\u05e2\u05ea \u05d7\u05d9\u05d9\u05dd \u05d0\u05d9\u05d7\u05d5\u05d3","\u05d2\u05d1\u05e2\u05ea \u05d7\u05d9\u05d9\u05dd \u05de\u05d0\u05d5\u05d7\u05d3","\u05d2\u05d1\u05e2\u05ea \u05e2\u05d5\u05d6","\u05d2\u05d1\u05e8\u05e2\u05dd","\u05d2\u05d1\u05ea","\u05d2\u05d3\u05d5\u05ea","\u05d2\u05d5\u05e0\u05df","\u05d2\u05d6\u05d9\u05ea","\u05d2\u05d6\u05e8","\u05d2\u05d9\u05dc\u05d2\u05dc","\u05d2\u05dc\u05d0\u05d5\u05df","\u05d2\u05dc\u05d9\u05dc \u05d9\u05dd","\u05d2\u05dc\u05e2\u05d3","\u05d2\u05df \u05e9\u05de\u05d5\u05d0\u05dc","\u05d2\u05e0\u05d5\u05e1\u05e8","\u05d2\u05e0\u05d9\u05d2\u05e8","\u05d2\u05e2\u05e9","\u05d2\u05e2\u05ea\u05d5\u05df","\u05d2\u05e8\u05d5\u05e4\u05d9\u05ea","\u05d2\u05e9\u05d5\u05e8","\u05d2\u05e9\u05e8","\u05d2\u05e9\u05e8 \u05d4\u05d6\u05d9\u05d5","\u05d2\u05ea","\u05d3\u05d1\u05d9\u05e8","\u05d3\u05d1\u05e8\u05ea","\u05d3\u05d2\u05e0\u05d9\u05d4 \u05d0'","\u05d3\u05d2\u05e0\u05d9\u05d4 \u05d1'","\u05d3\u05d5\u05e8\u05d5\u05ea","\u05d3\u05dc\u05d9\u05d4","\u05d3\u05df","\u05d3\u05e4\u05e0\u05d4","\u05d4\u05d0\u05d5\u05df","\u05d4\u05d1\u05d5\u05e0\u05d9\u05dd","\u05d4\u05d2\u05d5\u05e9\u05e8\u05d9\u05dd","\u05d4\u05d6\u05d5\u05e8\u05e2","\u05d4\u05d7\u05d5\u05ea\u05e8\u05d9\u05dd","\u05d4\u05de\u05e2\u05e4\u05d9\u05dc","\u05d4\u05e1\u05d5\u05dc\u05dc\u05d9\u05dd","\u05d4\u05e2\u05d5\u05d2\u05df","\u05d4\u05e8\u05d0\u05dc","\u05d4\u05e8\u05d3\u05d5\u05e3","\u05d6\u05d9\u05e7\u05d9\u05dd","\u05d7\u05d5\u05dc\u05d3\u05d4","\u05d7\u05d5\u05dc\u05d9\u05ea","\u05d7\u05d5\u05dc\u05ea\u05d4","\u05d7\u05d5\u05e7\u05d5\u05e7","\u05d7\u05d5\u05e8\u05e9\u05d9\u05dd","\u05d7\u05de\u05d3\u05d9\u05d4","\u05d7\u05e0\u05d9\u05ea\u05d4","\u05d7\u05e0\u05ea\u05d5\u05df","\u05d7\u05e4\u05e5 \u05d7\u05d9\u05d9\u05dd","\u05d7\u05e4\u05e6\u05d9-\u05d1\u05d4","\u05d7\u05e6\u05d5\u05e8","\u05d7\u05e6\u05e8\u05d9\u05dd","\u05d8\u05dc\u05dc\u05d9\u05dd","\u05d9\u05d2\u05d5\u05e8","\u05d9\u05d3 \u05de\u05e8\u05d3\u05db\u05d9","\u05d9\u05d4\u05dc","\u05d9\u05d6\u05e8\u05e2\u05d0\u05dc","\u05d9\u05d7\u05d3","\u05d9\u05d7\u05d9\u05e2\u05dd","\u05d9\u05d8\u05d1\u05ea\u05d4","\u05d9\u05d9\u05d8'\u05d1","\u05d9\u05e1\u05e2\u05d5\u05e8","\u05d9\u05e4\u05e2\u05ea ","\u05d9\u05e4\u05ea\u05d7","\u05d9\u05e7\u05d5\u05dd","\u05d9\u05e8\u05d0\u05d5\u05df","\u05db\u05d1\u05e8\u05d9","\u05db\u05d9\u05e1\u05d5\u05e4\u05d9\u05dd","\u05db\u05d9\u05e9\u05d5\u05e8","\u05db\u05e0\u05e8\u05ea","\u05db\u05e4\u05e8 \u05d1\u05dc\u05d5\u05dd","\u05db\u05e4\u05e8 \u05d2\u05dc\u05d9\u05e7\u05e1\u05d5\u05df","\u05db\u05e4\u05e8 \u05d2\u05dc\u05e2\u05d3\u05d9","\u05db\u05e4\u05e8 \u05d3\u05e0\u05d9\u05d0\u05dc","\u05db\u05e4\u05e8 \u05d4\u05d7\u05d5\u05e8\u05e9","\u05db\u05e4\u05e8 \u05d4\u05de\u05db\u05d1\u05d9 ","\u05db\u05e4\u05e8 \u05d4\u05e0\u05e9\u05d9\u05d0 ","\u05db\u05e4\u05e8 \u05d7\u05e8\u05d5\u05d1","\u05db\u05e4\u05e8 \u05de\u05e0\u05d7\u05dd","\u05db\u05e4\u05e8 \u05de\u05e1\u05e8\u05d9\u05e7","\u05db\u05e4\u05e8 \u05e1\u05d0\u05dc\u05d3","\u05db\u05e4\u05e8 \u05e2\u05d6\u05d4","\u05db\u05e4\u05e8 \u05e8\u05d5\u05e4\u05d9\u05df","\u05db\u05e8\u05de\u05d9\u05d4","\u05db\u05e8\u05dd \u05e9\u05dc\u05d5\u05dd","\u05db\u05e8\u05de\u05d9\u05dd","\u05dc\u05d4\u05d1","\u05dc\u05d4\u05d1\u05d5\u05ea \u05d4\u05d1\u05e9\u05df","\u05dc\u05d4\u05d1\u05d5\u05ea \u05d7\u05d1\u05d9\u05d1\u05d4","\u05dc\u05d5\u05d7\u05de\u05d9 \u05d4\u05d2\u05d9\u05d8\u05d0\u05d5\u05ea","\u05dc\u05d5\u05d8\u05dd","\u05dc\u05d5\u05d8\u05df","\u05de\u05d1\u05d5\u05d0 \u05d7\u05de\u05d4","\u05de\u05d2\u05d5\u05d5\u05df","\u05de\u05d2\u05d9\u05d3\u05d5","\u05de\u05d2\u05dc","\u05de\u05d2\u05df","\u05de\u05d5\u05e8\u05df","\u05de\u05d6\u05e8\u05e2","\u05de\u05d7\u05e0\u05d9\u05d9\u05dd","\u05de\u05dc\u05db\u05d9\u05d4","\u05de\u05e0\u05e8\u05d4","\u05de\u05e1\u05d3\u05d4","\u05de\u05e1\u05d9\u05dc\u05d5\u05ea","\u05de\u05e2\u05d1\u05e8\u05d5\u05ea","\u05de\u05e2\u05d2\u05df","\u05de\u05e2\u05d2\u05df \u05de\u05d9\u05db\u05d0\u05dc","\u05de\u05e2\u05d5\u05d6 \u05d7\u05d9\u05d9\u05dd","\u05de\u05e2\u05d9\u05df \u05d1\u05e8\u05d5\u05da","\u05de\u05e2\u05d9\u05df \u05e6\u05d1\u05d9","\u05de\u05e2\u05dc\u05d4 \u05d4\u05d7\u05de\u05d9\u05e9\u05d4","\u05de\u05e2\u05e0\u05d9\u05ea","\u05de\u05e4\u05dc\u05e1\u05d9\u05dd","\u05de\u05e6\u05d5\u05d1\u05d4","\u05de\u05e6\u05e4\u05d4 \u05e9\u05dc\u05dd","\u05de\u05e6\u05e8","\u05de\u05e8\u05d5\u05dd \u05d2\u05d5\u05dc\u05df","\u05de\u05e8\u05d7\u05d1\u05d9\u05d4","\u05de\u05e9\u05d0\u05d1\u05d9 \u05e9\u05d3\u05d4","\u05de\u05e9\u05d2\u05d1 \u05e2\u05dd","\u05de\u05e9\u05de\u05e8 \u05d3\u05d5\u05d3","\u05de\u05e9\u05de\u05e8 \u05d4\u05e0\u05d2\u05d1","\u05de\u05e9\u05de\u05e8 \u05d4\u05e2\u05de\u05e7 ","\u05de\u05e9\u05de\u05e8 \u05d4\u05e9\u05e8\u05d5\u05df","\u05de\u05e9\u05de\u05e8\u05d5\u05ea","\u05e0\u05d0\u05d5\u05ea \u05de\u05e8\u05d3\u05db\u05d9","\u05e0\u05d0\u05d5\u05ea \u05e1\u05de\u05d3\u05e8","\u05e0\u05d2\u05d1\u05d4","\u05e0\u05d5\u05d5\u05d4 \u05d0\u05d5\u05e8","\u05e0\u05d5\u05d5\u05d4 \u05d0\u05d9\u05dc\u05df","\u05e0\u05d5\u05d5\u05d4 \u05d0\u05d9\u05ea\u05df","\u05e0\u05d5\u05d5\u05d4 \u05d7\u05e8\u05d9\u05e3","\u05e0\u05d5\u05d5\u05d4 \u05d9\u05dd","\u05e0\u05d7\u05dc \u05e2\u05d5\u05d6","\u05e0\u05d7\u05e9\u05d5\u05dc\u05d9\u05dd","\u05e0\u05d7\u05e9\u05d5\u05df","\u05e0\u05d7\u05e9\u05d5\u05e0\u05d9\u05dd","\u05e0\u05d9\u05e6\u05e0\u05d9\u05dd","\u05e0\u05d9\u05e8 \u05d0\u05dc\u05d9\u05d4\u05d5","\u05e0\u05d9\u05e8 \u05d3\u05d5\u05d3","\u05e0\u05d9\u05e8 \u05d9\u05e6\u05d7\u05e7","\u05e0\u05d9\u05e8 \u05e2\u05d5\u05d6","\u05e0\u05d9\u05e8 \u05e2\u05dd","\u05e0\u05d9\u05e8\u05d9\u05dd","\u05e0\u05e2\u05df","\u05e0\u05e2\u05e8\u05df","\u05e0\u05e6\u05e8 \u05e1\u05d9\u05e8\u05e0\u05d9","\u05e0\u05ea\u05d9\u05d1 \u05d4\u05dc'\u05d4","\u05e1\u05d0\u05e1\u05d0","\u05e1\u05d5\u05e4\u05d4","\u05e1\u05de\u05e8","\u05e1\u05e2\u05e8","\u05e2\u05d1\u05e8\u05d5\u05df","\u05e2\u05d9\u05df \u05d2\u05d1","\u05e2\u05d9\u05df \u05d2\u05d3\u05d9","\u05e2\u05d9\u05df \u05d3\u05d5\u05e8","\u05e2\u05d9\u05df \u05d4\u05d7\u05d5\u05e8\u05e9","\u05e2\u05d9\u05df \u05d4\u05de\u05e4\u05e8\u05e5","\u05e2\u05d9\u05df \u05d4\u05e9\u05d5\u05e4\u05d8","\u05e2\u05d9\u05df \u05d4\u05e9\u05dc\u05d5\u05e9\u05d4","\u05e2\u05d9\u05df \u05d7\u05e8\u05d5\u05d3 \u05d0\u05d9\u05d7\u05d5\u05d3","\u05e2\u05d9\u05df \u05d7\u05e8\u05d5\u05d3 \u05de\u05d0\u05d5\u05d7\u05d3","\u05e2\u05d9\u05df \u05db\u05e8\u05de\u05dc","\u05e2\u05d9\u05df \u05d6\u05d9\u05d5\u05df","\u05e2\u05d9\u05df \u05e9\u05de\u05e8","\u05e2\u05d9\u05e0\u05ea","\u05e2\u05de\u05d9\u05e2\u05d3","\u05e2\u05de\u05d9\u05e8","\u05e4\u05dc\u05da","\u05e4\u05dc\u05de\u05d7\u05d9\u05dd","\u05e4\u05e8\u05d5\u05d3","\u05e6\u05d0\u05dc\u05d9\u05dd","\u05e6\u05d5\u05d1\u05d4","\u05e6\u05e8\u05e2\u05d4","\u05e6\u05d1\u05e2\u05d5\u05df","\u05e7\u05d1' \u05e9\u05d9\u05dc\u05e8","\u05e7\u05d3\u05e8\u05d9\u05dd","\u05e7\u05d8\u05d5\u05e8\u05d4","\u05e7\u05dc\u05d9\u05d4","\u05e7\u05e8\u05d9\u05ea \u05e2\u05e0\u05d1\u05d9\u05dd","\u05e8\u05d0\u05e9 \u05d4\u05e0\u05e7\u05e8\u05d4","\u05e8\u05d1\u05d3\u05d9\u05dd","\u05e8\u05d1\u05d9\u05d1\u05d9\u05dd","\u05e8\u05d1\u05d9\u05d3","\u05e8\u05d2\u05d1\u05d4","\u05e8\u05d2\u05d1\u05d9\u05dd","\u05e8\u05d5\u05d7\u05de\u05d4","\u05e8\u05de\u05d5\u05ea \u05de\u05e0\u05e9\u05d4","\u05e8\u05de\u05ea \u05d3\u05d5\u05d3 ","\u05e8\u05de\u05ea \u05d4\u05db\u05d5\u05d1\u05e9","\u05e8\u05de\u05ea \u05d4\u05e9\u05d5\u05e4\u05d8","\u05e8\u05de\u05ea \u05d9\u05d5\u05d7\u05e0\u05df","\u05e8\u05de\u05ea \u05e8\u05d7\u05dc","\u05e8\u05e2\u05d9\u05dd","\u05e8\u05e9\u05e4\u05d9\u05dd","\u05e9\u05d3\u05d4 \u05d1\u05d5\u05e7\u05e8","\u05e9\u05d3\u05d4 \u05d9\u05d5\u05d0\u05d1","\u05e9\u05d3\u05d4 \u05e0\u05d7\u05d5\u05dd","\u05e9\u05d3\u05d4 \u05e0\u05d7\u05de\u05d9\u05d4","\u05e9\u05d3\u05d5\u05ea \u05d9\u05dd","\u05e9\u05d5\u05d1\u05dc","\u05e9\u05e2\u05dc\u05d1\u05d9\u05dd","\u05e9\u05de\u05d9\u05e8","\u05e9\u05de\u05e8\u05ea","\u05e9\u05e0\u05d9\u05e8","\u05e9\u05e2\u05e8 \u05d4\u05d2\u05d5\u05dc\u05df","\u05e9\u05e2\u05e8 \u05d4\u05e2\u05de\u05e7\u05d9\u05dd","\u05e9\u05e4\u05d9\u05d9\u05dd","\u05e9\u05e8\u05d9\u05d3","\u05ea\u05d5\u05d1\u05dc","\u05ea\u05dc \u05d9\u05d5\u05e1\u05e3","\u05ea\u05dc \u05d9\u05e6\u05d7\u05e7","\u05ea\u05dc \u05e7\u05e6\u05d9\u05e8","\u05e9\u05d5\u05de\u05e8\u05d9\u05d4","fakePoint","fakePoint"],"lat":{"__ndarray__":"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","dtype":"float64","shape":[258]},"long":{"__ndarray__":"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","dtype":"float64","shape":[258]},"size":{"__ndarray__":"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","dtype":"float64","shape":[258]},"supportScale":{"__ndarray__":"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","dtype":"float64","shape":[258]},"validVotes":{"__ndarray__":"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","dtype":"float64","shape":[258]},"votingPercent":{"__ndarray__":"FgAAADEAAAAKAAAAJQAAABgAAAAbAAAAHAAAAD8AAAAZAAAAFQAAABMAAAAvAAAAJgAAABcAAAAaAAAAHgAAABIAAAAiAAAAIAAAADgAAABZAAAAKwAAACsAAAAaAAAAIQAAACQAAAAsAAAAPwAAABIAAAAWAAAAGwAAABsAAAAlAAAAGQAAABYAAAAUAAAALwAAACEAAAA7AAAAFgAAACIAAAAoAAAADAAAADIAAAAYAAAAFgAAACYAAAAjAAAAIQAAAEYAAAA9AAAAEwAAABUAAAAqAAAAFwAAACIAAAAcAAAAEgAAAC8AAAAZAAAAKAAAACEAAAASAAAAHAAAABEAAAAWAAAAMgAAACAAAAARAAAAFQAAACQAAAAUAAAACgAAACEAAAAaAAAAKQAAABUAAAAOAAAAHgAAABUAAAAJAAAANgAAABkAAAAhAAAAEgAAACkAAAAoAAAAHwAAAB4AAAAaAAAAEQAAACEAAAAaAAAAFgAAACwAAAAkAAAAJQAAAD0AAAA8AAAAEgAAACwAAAAyAAAAQgAAAAsAAAAaAAAAIAAAABcAAAAWAAAAJgAAACoAAAAMAAAAHgAAACAAAAAnAAAAFQAAACEAAAAhAAAAHgAAACYAAAAZAAAAEgAAACUAAAAXAAAALAAAACcAAAAkAAAAEgAAAB8AAAARAAAAHgAAABAAAAAbAAAAMAAAAD0AAAAjAAAAWwAAABMAAAAvAAAAKgAAAD8AAAAaAAAAJwAAABcAAAAsAAAAFgAAABwAAAAiAAAAEwAAACAAAAAbAAAAJAAAACQAAAApAAAALgAAAC0AAAAQAAAAMgAAAB4AAAARAAAAFwAAACAAAAAjAAAALwAAACIAAAAjAAAAOQAAABgAAAAkAAAARgAAABQAAAAcAAAAOQAAADoAAAA7AAAAGQAAADUAAAAdAAAAHQAAACMAAAAqAAAAJQAAABsAAAAcAAAAFQAAAEcAAAAmAAAAIQAAAF0AAABJAAAAKQAAACMAAAA7AAAAMwAAAB4AAAAtAAAALwAAACMAAAAdAAAAIgAAABYAAAAhAAAAIwAAACkAAAArAAAAFwAAABwAAAAcAAAAGQAAABwAAAASAAAAOQAAABkAAAAoAAAAHwAAADMAAAAwAAAAEgAAAEYAAAA9AAAAMgAAAEQAAAAgAAAAGQAAABYAAAAbAAAAVQAAABEAAAAZAAAAJAAAABMAAAAYAAAAJgAAAA4AAAApAAAANgAAACEAAAAdAAAAKAAAABUAAAANAAAAFwAAAA0AAAAPAAAAHgAAABkAAAAtAAAADwAAACYAAAAgAAAAGgAAACoAAAA0AAAAJgAAABIAAAAoAAAAPQAAAAAAAAAAAAAA","dtype":"int32","shape":[258]},"winner":["Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Lior Simcha","Lior Simcha","Lior Simcha","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Lior Simcha","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Lior Simcha","Lior Simcha","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Lior Simcha","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Lior Simcha","Lior Simcha","Lior Simcha","Lior Simcha","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Lior Simcha","Lior Simcha","Nir Meir","Lior Simcha","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Lior Simcha","Nir Meir","Nir Meir","Nir Meir","Nir Meir","Nir Meir"],"winner_color":["orange","orange","orange","blue","orange","orange","orange","blue","blue","orange","orange","orange","orange","blue","orange","blue","blue","orange","orange","orange","blue","orange","orange","blue","orange","blue","orange","orange","orange","orange","blue","orange","blue","blue","orange","blue","orange","blue","orange","blue","orange","orange","blue","orange","blue","blue","orange","orange","blue","orange","blue","blue","blue","blue","blue","orange","orange","orange","blue","orange","orange","blue","blue","blue","orange","orange","blue","blue","blue","blue","orange","orange","orange","orange","blue","orange","orange","orange","orange","orange","orange","orange","orange","orange","blue","orange","orange","orange","blue","orange","orange","blue","orange","blue","orange","orange","orange","orange","blue","orange","orange","blue","orange","orange","orange","orange","orange","orange","blue","orange","orange","orange","orange","orange","orange","blue","orange","orange","orange","orange","orange","orange","orange","orange","orange","orange","blue","orange","orange","blue","blue","orange","orange","blue","orange","blue","blue","orange","orange","orange","blue","orange","orange","orange","orange","blue","orange","orange","blue","orange","orange","blue","orange","blue","orange","blue","orange","blue","orange","blue","blue","orange","orange","blue","orange","orange","blue","orange","orange","orange","blue","orange","orange","orange","orange","orange","blue","blue","orange","orange","blue","orange","orange","blue","orange","orange","orange","blue","blue","orange","orange","orange","blue","orange","orange","blue","blue","blue","orange","blue","orange","orange","blue","blue","blue","blue","blue","blue","orange","blue","orange","orange","blue","orange","orange","orange","blue","orange","orange","blue","orange","blue","blue","orange","orange","blue","orange","orange","blue","orange","blue","blue","blue","orange","blue","blue","orange","blue","orange","orange","orange","orange","orange","orange","orange","blue","orange","orange","blue","orange","blue","orange","blue","orange","orange","orange","white","white"]},"selected":{"id":"3344","type":"Selection"},"selection_policy":{"id":"3356","type":"UnionRenderers"}},"id":"3343","type":"ColumnDataSource"},{"attributes":{"callback":null,"end":3961860.0839508628,"min_interval":5,"reset_end":3961860.0839508628,"reset_start":3439440.1886324068,"start":3439440.1886324068,"tags":[[["Latitude","Latitude",null]]]},"id":"3281","type":"Range1d"},{"attributes":{"active_drag":"auto","active_inspect":"auto","active_multi":null,"active_scroll":"auto","active_tap":"auto","tools":[{"id":"3282","type":"WheelZoomTool"},{"id":"3283","type":"BoxZoomTool"},{"id":"3286","type":"HoverTool"},{"id":"3309","type":"PanTool"},{"id":"3310","type":"ResetTool"}]},"id":"3311","type":"Toolbar"},{"attributes":{"attribution":"&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors, &copy; <a href=\"https://cartodb.com/attributions\">CartoDB</a>","url":"https://cartodb-basemaps-4.global.ssl.fastly.net/light_all/{Z}/{X}/{Y}.png"},"id":"3336","type":"WMTSTileSource"},{"attributes":{},"id":"3309","type":"PanTool"},{"attributes":{"match_aspect":true,"overlay":{"id":"3358","type":"BoxAnnotation"}},"id":"3283","type":"BoxZoomTool"},{"attributes":{},"id":"3310","type":"ResetTool"},{"attributes":{"axis_label":"Latitude","bounds":"auto","formatter":{"id":"3323","type":"MercatorTickFormatter"},"major_label_orientation":"horizontal","ticker":{"id":"3322","type":"MercatorTicker"},"visible":false},"id":"3303","type":"LinearAxis"},{"attributes":{"level":"underlay","tile_source":{"id":"3336","type":"WMTSTileSource"}},"id":"3339","type":"TileRenderer"},{"attributes":{"dimension":"lon"},"id":"3321","type":"MercatorTickFormatter"},{"attributes":{},"id":"3299","type":"BasicTicker"},{"attributes":{"dimension":"lon"},"id":"3320","type":"MercatorTicker"},{"attributes":{},"id":"3304","type":"BasicTicker"},{"attributes":{"dimension":"lat"},"id":"3323","type":"MercatorTickFormatter"},{"attributes":{"dimension":1,"grid_line_color":null,"ticker":{"id":"3304","type":"BasicTicker"}},"id":"3307","type":"Grid"},{"attributes":{"dimension":"lat"},"id":"3322","type":"MercatorTicker"},{"attributes":{"grid_line_color":null,"ticker":{"id":"3299","type":"BasicTicker"}},"id":"3302","type":"Grid"},{"attributes":{"source":{"id":"3343","type":"ColumnDataSource"}},"id":"3352","type":"CDSView"},{"attributes":{"axis_label":"Longitude","bounds":"auto","formatter":{"id":"3321","type":"MercatorTickFormatter"},"major_label_orientation":"horizontal","ticker":{"id":"3320","type":"MercatorTicker"},"visible":false},"id":"3298","type":"LinearAxis"},{"attributes":{"data_source":{"id":"3343","type":"ColumnDataSource"},"glyph":{"id":"3346","type":"Scatter"},"hover_glyph":{"id":"3349","type":"Scatter"},"muted_glyph":{"id":"3350","type":"Scatter"},"nonselection_glyph":{"id":"3347","type":"Scatter"},"selection_glyph":{"id":"3348","type":"Scatter"},"view":{"id":"3352","type":"CDSView"}},"id":"3351","type":"GlyphRenderer"},{"attributes":{"text":"Kibutzim 2019 Election Results","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"3290","type":"Title"},{"attributes":{},"id":"3296","type":"LinearScale"},{"attributes":{},"id":"3344","type":"Selection"},{"attributes":{},"id":"3294","type":"LinearScale"},{"attributes":{"fill_alpha":{"field":"alpha"},"fill_color":{"field":"color"},"line_color":{"value":"red"},"size":{"field":"size","units":"screen"},"x":{"field":"long"},"y":{"field":"lat"}},"id":"3349","type":"Scatter"},{"attributes":{"fill_alpha":{"value":0.2},"fill_color":{"field":"color"},"line_alpha":{"value":0.2},"line_color":{"value":"grey"},"size":{"field":"size","units":"screen"},"x":{"field":"long"},"y":{"field":"lat"}},"id":"3350","type":"Scatter"},{"attributes":{"callback":null,"end":3984827.224117142,"min_interval":5,"reset_end":3984827.224117142,"reset_start":3816539.761271442,"start":3816539.761271442,"tags":[[["Longitude","Longitude",null]]]},"id":"3280","type":"Range1d"}],"root_ids":["3289"]},"title":"Bokeh Application","version":"1.4.0"}};
+  var render_items = [{"docid":"025970b8-6054-431d-9375-9a51821c8b3f","roots":{"3289":"ddb52ece-adbb-4bde-bc02-2f1911827a47"}}];
+  root.Bokeh.embed.embed_items_notebook(docs_json, render_items);
+
+  }
+  if (root.Bokeh !== undefined) {
+    embed_document(root);
+  } else {
+    var attempts = 0;
+    var timer = setInterval(function(root) {
+      if (root.Bokeh !== undefined) {
+        clearInterval(timer);
+        embed_document(root);
+      } else {
+        attempts++;
+        if (attempts > 100) {
+          clearInterval(timer);
+          console.log("Bokeh: ERROR: Unable to run BokehJS code because BokehJS library is missing");
+        }
+      }
+    }, 10, root)
+  }
+})(window);
+</script>
+</div>
